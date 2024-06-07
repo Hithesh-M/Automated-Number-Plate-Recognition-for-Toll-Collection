@@ -1,0 +1,119 @@
+from kivy.app import App
+from kivy.uix.gridlayout import GridLayout
+from kivy.uix.textinput import TextInput
+from kivy.uix.button import Button
+from kivy.uix.popup import Popup
+from kivy.uix.label import Label
+from openpyxl import load_workbook
+from openpyxl import Workbook
+from pathlib import Path
+
+# This code defines a Python class named DigitalBank. Its constructor initializes the class by setting up a user database file named "user_balance.xlsx". If the file doesn't exist, it creates it using the create_user_database() method. Then, it loads the workbook into memory and sets the active worksheet for further operations. 
+class DigitalBank:
+    def __init__(self):
+        self.user_database = "user_balance.xlsx"
+        if not Path(self.user_database).is_file():
+            self.create_user_database()
+        self.user_wb = load_workbook(self.user_database)
+        self.user_ws = self.user_wb.active
+
+# This code defines a method create_user_database within a class. It attempts to create a new Excel workbook (Workbook), adds a worksheet (ws) with specified column headers, saves the workbook to a file specified by self.user_database attribute. If any error occurs during this process, it prints an error message along with the specific exception encountered.
+    def create_user_database(self):
+        try:
+            wb = Workbook()
+            ws = wb.active
+            ws.append([ "Vehicle Number", "Wheels", "Account Number", "Balance", "Phone Number" ])
+            wb.save(self.user_database)
+        except Exception as e:
+            print(f"Error creating user database: {e}")
+
+# This method, deposit, is part of a class and facilitates depositing funds into a user's account based on their account number. It iterates through the user database to find the account matching the provided number, updates the balance by adding the deposited amount, and saves the updated balance to the database. Finally, it displays a success message with the deposited amount and the new balance.
+    def deposit(self,vehicle_number, wheels, account_number, amount, phone_number):
+        # Check if the account number exists in the user database
+        account_found = False
+        for i, row in enumerate(self.user_ws.iter_rows(min_row=2, max_row=self.user_ws.max_row, values_only=True), start=2):
+            #print(f"Row {i}: {row}")  # Debugging: Print each row to see the data
+            if str(account_number) == str(row[2]):
+                account_found = True
+                current_balance = row[3]
+                new_balance = current_balance + amount
+                # Update balance in the user database
+                self.user_ws.cell(row=i, column=4, value=new_balance)
+                self.user_wb.save(self.user_database)
+                self.show_popup("Success", f"${amount} deposited successfully.\nNew balance: ${new_balance}")
+                break
+
+        if not account_found:
+            # Account number not found, ask user to create a new account
+            self.show_create_account_popup(vehicle_number, wheels, account_number, amount, phone_number)
+
+# This code defines a method show_create_account_popup within a class, which displays a popup window asking the user if they want to create a new account. The popup contains options "Yes" and "No". If the user clicks "Yes", it triggers a method create_account_and_deposit with provided parameters. If "No" is clicked, it displays another popup confirming the cancellation of the transaction.
+    def show_create_account_popup(self,vehicle_number, wheels, account_number, amount, phone_number):
+        content = GridLayout(cols=1)
+        content.add_widget(Label(text="Account number not found. Would you like to create a new account?"))
+        yes_button = Button(text="Yes")
+        yes_button.bind(on_press=lambda instance: self.create_account_and_deposit(vehicle_number, wheels, account_number, amount, phone_number))
+        content.add_widget(yes_button)
+        no_button = Button(text="No")
+        no_button.bind(on_press=lambda instance: self.show_popup("Info", "Transaction canceled."))
+        content.add_widget(no_button)
+        popup = Popup(title="Info", content=content, size_hint=(None, None), size=(400, 200))
+        popup.open()
+
+# This code defines a method create_account_and_deposit within a class. It takes parameters for vehicle number, wheels, account number, amount, and phone number. The method appends this information to a list user_ws, saves it to a user database file, and displays a success message in a popup dialog indicating the creation of a new account with the specified deposit amount.
+   def create_account_and_deposit(self, vehicle_number, wheels, account_number, amount, phone_number):
+        self.user_ws.append([vehicle_number, wheels, account_number, amount, phone_number])
+        self.user_wb.save(self.user_database)
+        self.show_popup("Success", f"New account created with ${amount} deposited.")
+
+# This function show_popup creates a popup window with a specified title and message. It uses the Popup class from Kivy framework to create the popup, sets its title and content as per the provided arguments, specifies its size, and then displays it on the screen.
+   def show_popup(self, title, message):
+        popup = Popup(title=title, content=Label(text=message), size_hint=(None, None), size=(400, 200))
+        popup.open()
+
+# This code defines a class DigitalBankApp inheriting from GridLayout, setting up a layout with two columns. It includes text input fields for account number, phone number, vehicle number, number of wheels, and amount, along with a button labeled "Deposit". The button is bound to a method deposit() which is likely intended to handle the deposit operation when pressed.
+class DigitalBankApp(GridLayout):
+    def __init__(self, **kwargs):
+        super(DigitalBankApp, self).__init__(**kwargs)
+        self.cols = 2
+        self.bank = DigitalBank()
+
+        self.account_number_input = TextInput(multiline=False, hint_text="Account Number")
+        self.add_widget(self.account_number_input)
+
+        self.phone_number_input = TextInput(multiline=False, hint_text="phone Number")
+        self.add_widget(self.phone_number_input)
+
+        self.vehicle_number_input = TextInput(multiline=False, hint_text="Vehicle Number")  # Add vehicle number field
+        self.add_widget(self.vehicle_number_input)
+
+        self.wheels_input = TextInput(multiline=False, hint_text="Number of Wheels")  # Add number of wheels field
+        self.add_widget(self.wheels_input)
+
+        self.amount_input = TextInput(multiline=False, hint_text="Amount")
+        self.add_widget(self.amount_input)
+
+        self.deposit_button = Button(text="Deposit")
+        self.deposit_button.bind(on_press=self.deposit)
+        self.add_widget(self.deposit_button)
+
+# It extracts input values (account number, vehicle number, number of wheels, amount, and phone number) from GUI input fields, converts them to appropriate types, and then calls a method deposit on an instance of self.bank (presumably a bank object), passing the extracted values as arguments to deposit funds associated with a vehicle into a bank account.
+    def deposit(self, instance):
+        account_number = self.account_number_input.text
+        vehicle_number = self.vehicle_number_input.text
+        wheels = self.wheels_input.text
+        amount = float(self.amount_input.text)
+        phone_number = int(self.phone_number_input.text)
+        self.bank.deposit(vehicle_number, wheels, account_number, amount, phone_number)
+
+# This snippet defines a class DigitalBankAppApp that inherits from the App class, typically from a GUI framework like Kivy. It contains a method build() that sets the title of the application window to "Digital Bank App" and returns an instance of the DigitalBankApp class, presumably representing the main interface or functionality of the digital bank application.
+class DigitalBankAppApp(App):
+    def build(self):
+        self.title = "Digital Bank App"  # Set the title of the application window
+        return DigitalBankApp()
+
+# This snippet checks if the Python script is being run as the main program. If so, it initializes an instance of the DigitalBankApp class and runs its run() method, presumably launching the application. This is a common pattern in Python to ensure that certain code is only executed when the script is run directly, not when it's imported as a module into another script.
+if __name__ == "__main__":
+    DigitalBankAppApp().run()
+
+    

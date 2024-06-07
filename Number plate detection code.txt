@@ -1,0 +1,138 @@
+import cv2
+import imutils
+import numpy as np
+import pytesseract
+import re
+from picamera.array import PiRGBArray
+from picamera import PiCamera
+from openpyxl import load_workbook
+from twilio.rest import Client
+from datetime import datetime
+
+# These values are typically used to set up and authenticate communication with Twilio's API for sending messages or making calls programmatically.
+account_sid = ''
+auth_token = ''
+twilio_number = ''
+
+# This instance will be used to store the image data captured by the camera. The data will be stored in a format that is easy to work with for image processing tasks, such as using OpenCV or other image processing libraries.
+rawCapture = PiRGBArray(camera, size=(640, 480))
+
+# This snippet of code loads an Excel workbook named "user_balance.xlsx" and accesses its active worksheet.
+user_database = "user_balance.xlsx"
+user_wb = load_workbook(user_database)
+user_ws = user_wb.active
+
+# This code snippet defines a dictionary named deduction_rates, which maps the number of wheels (as strings) to corresponding deduction rates in some unit (e.g., currency or points). If the number of wheels is not specifically listed in the dictionary, it defaults to a deduction rate of 200.
+deduction_rates = {
+    '8': 130,
+    '6': 150,
+    '4': 100,
+    '10': 200,
+    "default": 200  # Default rate for wheels greater than 10
+}
+
+# This code snippet captures frames continuously from a Raspberry Pi camera, displays them using OpenCV, and processes the frame if the 's' key is pressed. Upon pressing 's', it converts the frame to grayscale, applies bilateral filtering and Canny edge detection, finds and sorts the contours, and retains the largest 10 contours for further processing
+for frame in camera.capture_continuous(rawCapture, format="bgr", use_video_port=True):
+    image = frame.array
+    cv2.imshow("Frame", image)
+    key = cv2.waitKey(1) & 0xFF
+    rawCapture.truncate(0)
+    if key == ord("s"):
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        gray = cv2.bilateralFilter(gray, 11, 17, 17)
+        edged = cv2.Canny(gray, 30, 200)
+        
+        cnts = cv2.findContours(edged.copy(), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        cnts = imutils.grab_contours(cnts)
+        cnts = sorted(cnts, key=cv2.contourArea, reverse=True)[:10]
+        screenCnt = None
+        
+        # This code snippet processes a list of contours (cnts) to detect a rectangular shape (likely a document or screen) in an image. It calculates the perimeter (peri) of each contour, approximates it to a polygon (approx), and checks if the polygon has four sides. If a rectangle is found, it draws the contour on the image in green; otherwise, it prints a message indicating no contour was detected.
+        for c in cnts:
+            peri = cv2.arcLength(c, True)
+            approx = cv2.approxPolyDP(c, 0.018 * peri, True)
+            if len(approx) == 4:
+                screenCnt = approx
+                break
+        if screenCnt is None:
+            detected = 0
+            print("No contour detected")
+        else:
+            detected = 1
+        if detected == 1:
+            cv2.drawContours(image, [screenCnt], -1, (0, 255, 0), 3)
+
+        # This code snippet creates a mask for a specific contour (screenCnt) on a grayscale image (gray). It uses this mask to isolate the area within the contour on the original image, and then it finds and crops the bounding box around the contour from the grayscale image. The result is a cropped section of gray containing only the area within the contour.
+        mask = np.zeros(gray.shape, np.uint8)
+        new_image = cv2.drawContours(mask, [screenCnt], 0, 255, -1)
+        new_image = cv2.bitwise_and(image, image, mask=mask)
+        (x, y) = np.where(mask == 255)
+        (topx, topy) = (np.min(x), np.min(y))
+        (bottomx, bottomy) = (np.max(x), np.max(y))
+        cropped = gray[topx:bottomx + 1, topy:bottomy + 1]
+
+        # This code snippet resizes an image (cropped) by a factor of 2 using cubic interpolation, then uses Tesseract OCR to detect and extract alphanumeric characters from the resized image. It prints the detected text and displays both the original frame and the resized cropped image in separate windows until a key is pressed.
+        resized_cropped = cv2.resize(cropped, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+        text = pytesseract.image_to_string(resized_cropped, config='--psm 8 --oem 3 -c tessedit_char_whitelist=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ')
+        print("Detected Number is:", text)
+        cv2.imshow("Frame", image)
+        cv2.imshow('Cropped', resized_cropped)
+        cv2.waitKey(0)
+
+        # Assume detected number plate is stored in 'detected_plate'
+        detected_plate = text
+        
+        sanitized_plate = re.sub(r'\W+','',detected_plate)
+
+        # This code snippet iterates over rows in an Excel worksheet, starting from the second row to the last, checking if sanitized_plate matches the first column (row[0]). If a match is found, it sets plate_found to True, and assigns the values from the fourth, second, and fifth columns to user_balance, num_wheels, and user_number, respectively.
+        plate_found = False
+        for row in user_ws.iter_rows(min_row=2, max_row=user_ws.max_row, values_only=True):
+            if sanitized_plate == row[0]:
+                plate_found = True
+                user_balance = row[3]
+                num_wheels = row[1]
+                user_number = int(row[4])
+        # This code snippet checks the number of wheels (num_wheels) against a dictionary of deduction rates (deduction_rates) to determine the deduction amount. It then verifies if the user's balance (user_balance) is sufficient to cover this amount; if not, it prompts the user to recharge. If sufficient, it deducts the amount from the balance and updates the user's new balance in an Excel worksheet (user_ws) for the row corresponding to the user's sanitized license plate (sanitized_plate).
+                if num_wheels in deduction_rates:
+                    deduction_amount = deduction_rates[num_wheels]
+                else:
+                    deduction_amount = deduction_rates["default"]
+                
+                if user_balance < deduction_amount:
+                    print("Amount is not enough. Please recharge your account.")
+                else:
+                    new_balance = user_balance - deduction_amount
+                    for r in user_ws.iter_rows(min_row=2, max_row=user_ws.max_row):
+                        if sanitized_plate == r[0].value:
+                            r[3].value = new_balance
+                            break
+        # This code snippet saves user data to a database file, sends an SMS notification containing the deducted amount for a vehicle identified by its number plate, and the location of the toll booth. The message is sent using Twilio's API, and once the SMS is sent successfully, the loop breaks, presumably after completing the necessary tasks for the current transaction.
+                    user_wb.save(user_database)
+                    message_body = ("Amount deducted for vehicle with number {} is {}\n Toll Ujire".format(sanitized_plate,deduction_amount))
+                    #print("Amount deducted for vehicle with {} wheels: ${}".format(num_wheels, deduction_amount))
+                    client = Client(account_sid, auth_token)
+                    message = client.messages.create(
+                              body=message_body,
+                              from_=twilio_number,
+                              to = user_number
+                    )
+                    print("SMS sent successfully!")
+                break
+# This snippet prompts the user to input information about a vehicle if a license plate hasn't been found. It collects the number of wheels, account number, amount, and mobile number associated with the vehicle, appends this information to a list user_ws, saves it to a user database file, and prints a message confirming the registration of the new vehicle with its sanitized plate number.
+if not plate_found:
+            num_wheels = input("Enter number of wheels:")  
+            acnt_num,amount = input("Enter account number, amount:").split(",")
+            acnt_num = int(acnt_num.strip())
+            amount = int(amount.strip())
+            user_number = int(input("Enter mobile number:"))
+            user_ws.append([sanitized_plate, num_wheels,acnt_num,amount,user_number])
+            user_wb.save(user_database)
+            print("New vehicle registered with plate:", sanitized_plate)
+
+# Display the original image with contour and cropped region
+        cv2.imshow("Frame", image)
+        cv2.waitKey(0)
+        break
+
+# This snippet code will close all OpenCV windows that are currently open. This function call is typically used at the end of an OpenCV script to clean up and close any displayed windows, ensuring that the program exits cleanly and does not leave any windows open after execution.
+cv2.destroyAllWindows()
